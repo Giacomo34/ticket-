@@ -1,7 +1,7 @@
 // Production version of script.js with real backend integration
 
 // Configuration
-const API_BASE_URL = 'https://your-backend-url.com'; // Replace with actual backend URL
+const API_BASE_URL = 'https://ticket-production-f452.up.railway.app'; // Replace with actual backend URL
 const STRIPE_PUBLISHABLE_KEY = 'pk_live_...'; // Replace with actual Stripe publishable key
 
 // Initialize Stripe
