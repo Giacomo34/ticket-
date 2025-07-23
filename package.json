@@ -1,0 +1,37 @@
+{
+  "name": "djset-landing-page",
+  "version": "1.0.0",
+  "description": "Landing page per evento DJ Set - Isla Bonita Punta Ala",
+  "main": "index.html",
+  "scripts": {
+    "dev": "cd backend && npm run dev",
+    "start": "cd backend && npm start",
+    "install-backend": "cd backend && npm install",
+    "build": "echo 'Frontend is static, no build needed'",
+    "deploy-frontend": "echo 'Deploy to Netlify'",
+    "deploy-backend": "echo 'Deploy to Railway'"
+  },
+  "keywords": [
+    "dj",
+    "event",
+    "landing-page",
+    "tickets",
+    "stripe",
+    "nodejs",
+    "italy-on-demand"
+  ],
+  "author": "ITALY ON DEMAND",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/djset-landing-page.git"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "workspaces": [
+    "backend"
+  ]
+}
+

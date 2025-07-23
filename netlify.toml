@@ -1,0 +1,68 @@
+[build]
+  # Directory contenente i file del frontend
+  publish = "frontend"
+  
+  # Comando di build (non necessario per sito statico)
+  command = "echo 'Static site, no build needed'"
+
+[build.environment]
+  # Versione Node.js per build
+  NODE_VERSION = "18"
+
+# Configurazione headers per performance
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-XSS-Protection = "1; mode=block"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+
+# Cache per file statici
+[[headers]]
+  for = "/*.css"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/*.js"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+# Cache per HTML (no cache per aggiornamenti)
+[[headers]]
+  for = "/*.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+# Redirect per SPA (se necessario)
+[[redirects]]
+  from = "/admin"
+  to = "/admin.html"
+  status = 200
+
+# Redirect per API calls al backend
+[[redirects]]
+  from = "/api/*"
+  to = "https://your-backend-url.railway.app/:splat"
+  status = 200
+  force = true
+
+# Configurazione form handling (per contatti)
+[build.processing]
+  skip_processing = false
+
+[build.processing.css]
+  bundle = true
+  minify = true
+
+[build.processing.js]
+  bundle = false
+  minify = true
+
+[build.processing.html]
+  pretty_urls = true
+
+[build.processing.images]
+  compress = true
+

@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DJ Set - Isla Bonita Punta Ala | ITALY ON DEMAND</title>
+    <meta name="description" content="Acquista i tuoi biglietti per il DJ Set del 24 luglio all'Isla Bonita, Punta Ala. Aperitivi, antipasti e musica in un'atmosfera unica.">
+    <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="container">
+            <div class="header-content">
+                <h1 class="brand">ITALY ON DEMAND</h1>
+                <p class="collaboration">in collaborazione con Isla Bonita</p>
+            </div>
+        </div>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="container">
+            <div class="hero-content">
+                <h2 class="event-title">DJ SET</h2>
+                <div class="event-details">
+                    <div class="detail-item">
+                        <span class="detail-label">Data</span>
+                        <span class="detail-value">24 Luglio</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">Orario</span>
+                        <span class="detail-value">18:00 - 22:00</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">Location</span>
+                        <span class="detail-value">Isla Bonita, Punta Ala</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Offerings Section -->
+    <section class="offerings">
+        <div class="container">
+            <h3 class="section-title">La Nostra Offerta</h3>
+            <div class="offerings-grid">
+                <div class="offering-item">
+                    <h4>Prosciutto al Coltello</h4>
+                    <p>Prosciutto tagliato a mano con maestria</p>
+                </div>
+                <div class="offering-item">
+                    <h4>Antipasti</h4>
+                    <p>Selezione di antipasti della tradizione italiana</p>
+                </div>
+                <div class="offering-item">
+                    <h4>Spritz</h4>
+                    <p>€5 a bicchiere</p>
+                </div>
+                <div class="offering-item">
+                    <h4>Drinks</h4>
+                    <p>€8 a bicchiere</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Tickets Section -->
+    <section class="tickets">
+        <div class="container">
+            <h3 class="section-title">Biglietti</h3>
+            <div class="tickets-grid">
+                <div class="ticket-card">
+                    <div class="ticket-header">
+                        <h4 class="ticket-name">Standard</h4>
+                        <div class="ticket-price">€10</div>
+                    </div>
+                    <div class="ticket-content">
+                        <p class="ticket-description">Due Aperol Spritz inclusi</p>
+                        <button class="btn btn-primary" onclick="purchaseTicket('standard', 10)">
+                            Acquista Biglietto
+                        </button>
+                    </div>
+                </div>
+
+                <div class="ticket-card featured">
+                    <div class="ticket-header">
+                        <h4 class="ticket-name">Plus</h4>
+                        <div class="ticket-price">€15</div>
+                    </div>
+                    <div class="ticket-content">
+                        <p class="ticket-description">Due Aperol Spritz + Antipasti</p>
+                        <button class="btn btn-primary" onclick="purchaseTicket('plus', 15)">
+                            Acquista Biglietto
+                        </button>
+                    </div>
+                </div>
+
+                <div class="ticket-card special">
+                    <div class="ticket-header">
+                        <h4 class="ticket-name">Divanetti</h4>
+                        <div class="ticket-price">€50</div>
+                        <span class="per-person">a persona</span>
+                    </div>
+                    <div class="ticket-content">
+                        <p class="ticket-description">Prenotazione tavolo riservato</p>
+                        <p class="contact-note">Contatta direttamente l'azienda per prenotazioni</p>
+                        <button class="btn btn-secondary" onclick="contactForReservation()">
+                            Contatta per Prenotazione
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Payment Methods -->
+    <section class="payment-methods">
+        <div class="container">
+            <h3 class="section-title">Metodi di Pagamento</h3>
+            <div class="payment-options">
+                <div class="payment-option">
+                    <span class="payment-icon">💳</span>
+                    <span>Carta di Credito</span>
+                </div>
+                <div class="payment-option">
+                    <span class="payment-icon">📱</span>
+                    <span>Apple Pay</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Contact Section -->
+    <section class="contact">
+        <div class="container">
+            <h3 class="section-title">Contatti</h3>
+            <div class="contact-grid">
+                <div class="contact-item">
+                    <h4>Email</h4>
+                    <a href="mailto:giacomo.pencosavli@italyondemand.partners">
+                        giacomo.pencosavli@italyondemand.partners
+                    </a>
+                </div>
+                <div class="contact-item">
+                    <h4>Telefono</h4>
+                    <a href="tel:+393397470384">+39 339 747 0384</a>
+                </div>
+                <div class="contact-item">
+                    <h4>Sede</h4>
+                    <address>
+                        Via Ponte Vetero 11<br>
+                        20121 Milano
+                    </address>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <p>&copy; 2025 ITALY ON DEMAND. Tutti i diritti riservati.</p>
+                <p>In collaborazione con Isla Bonita, Punta Ala</p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Wallet Integration Modal -->
+    <div id="walletModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h3>Aggiungi al Wallet</h3>
+            <p>Il tuo biglietto è stato acquistato con successo!</p>
+            <div class="wallet-buttons">
+                <button id="addToAppleWallet" class="btn btn-primary">
+                    Aggiungi a Apple Wallet
+                </button>
+                <button id="addToGoogleWallet" class="btn btn-secondary">
+                    Aggiungi a Google Wallet
+                </button>
+            </div>
+            <div class="ticket-info">
+                <h4>Dettagli Biglietto</h4>
+                <div id="ticketDetails"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
+
