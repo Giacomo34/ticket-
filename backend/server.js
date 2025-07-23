@@ -19,7 +19,7 @@ const pool = new Pool({
 });
 
 // Email transporter
-const transporter = nodemailer.createTransporter({
+const transporter = nodemailer.createTransport({
   host: 'smtp.resend.com',
   port: 587,
   secure: false,
