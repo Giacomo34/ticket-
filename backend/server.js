@@ -1,16 +1,23 @@
 const express = require('express');
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const cors = require('cors');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
 const { Pool } = require('pg');
-const nodemailer = require('nodemailer');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const { Resend } = require('resend');
 const QRCode = require('qrcode');
-const { v4: uuidv4 } = require('uuid');
-require('dotenv').config();
+const PDFDocument = require('pdfkit');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const port = process.env.PORT || 3000;
+
+// Middleware
+app.use(cors({
+  origin: ['https://eventi.puntala.info', 'http://localhost:3000'],
+  credentials: true
+}));
+app.use(express.json());
+app.use('/webhook', express.raw({ type: 'application/json' }));
 
 // Database connection
 const pool = new Pool({
@@ -18,361 +25,468 @@ const pool = new Pool({
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
-// Email transporter
-const transporter = nodemailer.createTransport({
-  host: 'smtp.resend.com',
-  port: 587,
-  secure: false,
-  auth: {
-    user: 'resend',
-    pass: process.env.RESEND_API_KEY
+// Resend email client
+const resend = new Resend(process.env.RESEND_API_KEY);
+
+// Ticket types configuration
+const TICKET_TYPES = {
+  standard: {
+    id: 'standard',
+    name: 'Standard',
+    description: 'Due Aperol Spritz',
+    price: 1000, // €10.00 in cents
+    currency: 'eur'
+  },
+  plus: {
+    id: 'plus', 
+    name: 'Plus',
+    description: 'Due Aperol Spritz + Antipasti',
+    price: 1500, // €15.00 in cents
+    currency: 'eur'
   }
-});
-
-// Middleware
-app.use(helmet());
-app.use(cors({
-  origin: process.env.FRONTEND_URL || '*',
-  credentials: true
-}));
-
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
-});
-app.use(limiter);
-
-// Stripe webhook - deve essere prima di express.json()
-app.post('/webhook', express.raw({type: 'application/json'}), async (req, res) => {
-  const sig = req.headers['stripe-signature'];
-  let event;
-
-  try {
-    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
-  } catch (err) {
-    console.log(`Webhook signature verification failed.`, err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
-  }
-
-  // Handle the event
-  switch (event.type) {
-    case 'payment_intent.succeeded':
-      const paymentIntent = event.data.object;
-      await handleSuccessfulPayment(paymentIntent);
-      break;
-    default:
-      console.log(`Unhandled event type ${event.type}`);
-  }
-
-  res.json({received: true});
-});
-
-app.use(express.json());
-
-// Routes
-
-// Health check
-app.get('/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
-});
-
-// Create payment intent
-app.post('/create-payment-intent', async (req, res) => {
-  try {
-    const { ticketType, price, customerInfo } = req.body;
-
-    // Validate input
-    if (!ticketType || !price || !customerInfo?.email) {
-      return res.status(400).json({ error: 'Missing required fields' });
-    }
-
-    // Validate ticket type and price
-    const validTickets = {
-      'standard': 10,
-      'plus': 15
-    };
-
-    if (!validTickets[ticketType] || validTickets[ticketType] !== price) {
-      return res.status(400).json({ error: 'Invalid ticket type or price' });
-    }
-
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: price * 100, // Convert to cents
-      currency: 'eur',
-      metadata: {
-        ticketType,
-        customerEmail: customerInfo.email,
-        customerName: customerInfo.name || '',
-        customerPhone: customerInfo.phone || ''
-      },
-      receipt_email: customerInfo.email
-    });
-
-    res.json({
-      clientSecret: paymentIntent.client_secret
-    });
-
-  } catch (error) {
-    console.error('Error creating payment intent:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// Handle divanetti contact request
-app.post('/contact-divanetti', async (req, res) => {
-  try {
-    const { name, email, phone, message } = req.body;
-
-    if (!name || !email) {
-      return res.status(400).json({ error: 'Name and email are required' });
-    }
-
-    // Send email to ITALY ON DEMAND
-    await transporter.sendMail({
-      from: process.env.FROM_EMAIL || 'eventi@italyondemand.partners',
-      to: 'giacomo.pencosavli@italyondemand.partners',
-      subject: 'Richiesta Prenotazione Divanetti - DJ Set 24 Luglio',
-      html: generateDivanettiEmailTemplate({ name, email, phone, message })
-    });
-
-    // Send confirmation to customer
-    await transporter.sendMail({
-      from: process.env.FROM_EMAIL || 'eventi@italyondemand.partners',
-      to: email,
-      subject: 'Richiesta Ricevuta - Prenotazione Divanetti',
-      html: generateCustomerConfirmationTemplate({ name })
-    });
-
-    res.json({ success: true, message: 'Richiesta inviata con successo' });
-
-  } catch (error) {
-    console.error('Error handling divanetti contact:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// Get ticket by ID (for verification)
-app.get('/ticket/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    
-    const result = await pool.query(
-      'SELECT id, type, price, customer_name, created_at FROM tickets WHERE id = $1',
-      [id]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Ticket not found' });
-    }
-
-    res.json(result.rows[0]);
-
-  } catch (error) {
-    console.error('Error fetching ticket:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// Admin endpoint - get all tickets (basic auth required)
-app.get('/admin/tickets', async (req, res) => {
-  try {
-    // Basic auth check
-    const auth = req.headers.authorization;
-    if (!auth || auth !== `Bearer ${process.env.ADMIN_TOKEN}`) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    const result = await pool.query(
-      'SELECT id, type, price, customer_name, customer_email, created_at FROM tickets ORDER BY created_at DESC'
-    );
-
-    res.json(result.rows);
-
-  } catch (error) {
-    console.error('Error fetching tickets:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// Functions
-
-async function handleSuccessfulPayment(paymentIntent) {
-  try {
-    const ticketId = uuidv4();
-    const qrCodeData = await QRCode.toDataURL(`https://${process.env.FRONTEND_DOMAIN}/verify/${ticketId}`);
-
-    // Save ticket to database
-    await pool.query(
-      `INSERT INTO tickets (id, type, price, customer_name, customer_email, customer_phone, stripe_payment_id, qr_code, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
-      [
-        ticketId,
-        paymentIntent.metadata.ticketType,
-        paymentIntent.amount / 100,
-        paymentIntent.metadata.customerName,
-        paymentIntent.metadata.customerEmail,
-        paymentIntent.metadata.customerPhone,
-        paymentIntent.id,
-        qrCodeData
-      ]
-    );
-
-    // Send ticket email
-    await sendTicketEmail({
-      id: ticketId,
-      type: paymentIntent.metadata.ticketType,
-      price: paymentIntent.amount / 100,
-      customerName: paymentIntent.metadata.customerName,
-      customerEmail: paymentIntent.metadata.customerEmail,
-      qrCode: qrCodeData
-    });
-
-    console.log(`Ticket ${ticketId} created and sent to ${paymentIntent.metadata.customerEmail}`);
-
-  } catch (error) {
-    console.error('Error handling successful payment:', error);
-  }
-}
-
-async function sendTicketEmail(ticketData) {
-  const ticketTypes = {
-    'standard': 'Standard - Due Aperol Spritz',
-    'plus': 'Plus - Due Aperol Spritz + Antipasti'
-  };
-
-  const emailHtml = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="utf-8">
-      <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-        .header { background: #2d5016; color: white; padding: 20px; text-align: center; }
-        .content { padding: 20px; background: #f9f9f9; }
-        .ticket-info { background: white; padding: 20px; border-radius: 8px; margin: 20px 0; }
-        .qr-code { text-align: center; margin: 20px 0; }
-        .footer { text-align: center; padding: 20px; color: #666; font-size: 14px; }
-      </style>
-    </head>
-    <body>
-      <div class="container">
-        <div class="header">
-          <h1>🎵 DJ SET - ISLA BONITA</h1>
-          <p>Il tuo biglietto è confermato!</p>
-        </div>
-        
-        <div class="content">
-          <h2>Ciao ${ticketData.customerName || 'Cliente'}!</h2>
-          <p>Grazie per aver acquistato il biglietto per il nostro evento DJ Set.</p>
-          
-          <div class="ticket-info">
-            <h3>📋 Dettagli Biglietto</h3>
-            <p><strong>ID Biglietto:</strong> ${ticketData.id}</p>
-            <p><strong>Tipo:</strong> ${ticketTypes[ticketData.type]}</p>
-            <p><strong>Prezzo:</strong> €${ticketData.price}</p>
-            <p><strong>Data Evento:</strong> 24 Luglio 2025</p>
-            <p><strong>Orario:</strong> 18:00 - 22:00</p>
-            <p><strong>Location:</strong> Isla Bonita, Punta Ala</p>
-          </div>
-
-          <div class="qr-code">
-            <h3>🎫 Il Tuo Biglietto</h3>
-            <p>Mostra questo QR code all'ingresso:</p>
-            <img src="${ticketData.qrCode}" alt="QR Code Biglietto" style="max-width: 200px;">
-          </div>
-
-          <div class="ticket-info">
-            <h3>ℹ️ Informazioni Importanti</h3>
-            <ul>
-              <li>Conserva questa email come conferma del tuo acquisto</li>
-              <li>Mostra il QR code all'ingresso dell'evento</li>
-              <li>L'evento si svolge all'aperto, vestiti di conseguenza</li>
-              <li>Per informazioni: giacomo.pencosavli@italyondemand.partners</li>
-            </ul>
-          </div>
-        </div>
-
-        <div class="footer">
-          <p>ITALY ON DEMAND in collaborazione con Isla Bonita</p>
-          <p>Via Ponte Vetero 11, 20121 Milano</p>
-          <p>+39 339 747 0384</p>
-        </div>
-      </div>
-    </body>
-    </html>
-  `;
-
-  await transporter.sendMail({
-    from: process.env.FROM_EMAIL || 'eventi@italyondemand.partners',
-    to: ticketData.customerEmail,
-    subject: '🎵 Il tuo biglietto per DJ Set - Isla Bonita',
-    html: emailHtml
-  });
-}
-
-function generateDivanettiEmailTemplate({ name, email, phone, message }) {
-  return `
-    <h2>Nuova Richiesta Prenotazione Divanetti</h2>
-    <p><strong>Nome:</strong> ${name}</p>
-    <p><strong>Email:</strong> ${email}</p>
-    <p><strong>Telefono:</strong> ${phone || 'Non fornito'}</p>
-    <p><strong>Messaggio:</strong></p>
-    <p>${message || 'Nessun messaggio aggiuntivo'}</p>
-    <hr>
-    <p><strong>Evento:</strong> DJ Set - 24 Luglio 2025</p>
-    <p><strong>Prezzo Divanetti:</strong> €50 a persona</p>
-  `;
-}
-
-function generateCustomerConfirmationTemplate({ name }) {
-  return `
-    <h2>Richiesta Ricevuta</h2>
-    <p>Ciao ${name},</p>
-    <p>Abbiamo ricevuto la tua richiesta per la prenotazione dei divanetti per l'evento DJ Set del 24 luglio.</p>
-    <p>Ti contatteremo entro 24 ore per confermare la disponibilità e finalizzare la prenotazione.</p>
-    <p><strong>Prezzo:</strong> €50 a persona</p>
-    <p>Grazie per il tuo interesse!</p>
-    <hr>
-    <p>ITALY ON DEMAND<br>
-    giacomo.pencosavli@italyondemand.partners<br>
-    +39 339 747 0384</p>
-  `;
-}
+};
 
 // Initialize database
 async function initDatabase() {
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS tickets (
-        id UUID PRIMARY KEY,
-        type VARCHAR(20) NOT NULL,
-        price INTEGER NOT NULL,
-        customer_name VARCHAR(255),
+        id SERIAL PRIMARY KEY,
+        ticket_id VARCHAR(255) UNIQUE NOT NULL,
+        type VARCHAR(50) NOT NULL,
+        quantity INTEGER NOT NULL,
+        total_amount INTEGER NOT NULL,
+        currency VARCHAR(3) NOT NULL,
+        customer_name VARCHAR(255) NOT NULL,
         customer_email VARCHAR(255) NOT NULL,
         customer_phone VARCHAR(50),
-        stripe_payment_id VARCHAR(255) NOT NULL,
+        payment_intent_id VARCHAR(255),
+        payment_status VARCHAR(50) DEFAULT 'pending',
         qr_code TEXT,
-        created_at TIMESTAMP DEFAULT NOW()
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
+    
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS divanetti_requests (
+        id SERIAL PRIMARY KEY,
+        customer_name VARCHAR(255) NOT NULL,
+        customer_email VARCHAR(255) NOT NULL,
+        customer_phone VARCHAR(50) NOT NULL,
+        message TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    
     console.log('Database initialized successfully');
   } catch (error) {
     console.error('Error initializing database:', error);
   }
 }
 
+// Generate unique ticket ID
+function generateTicketId() {
+  return 'DJSET-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9).toUpperCase();
+}
+
+// Generate QR code
+async function generateQRCode(ticketId) {
+  try {
+    const qrData = JSON.stringify({
+      ticketId,
+      event: 'DJ Set - Isla Bonita',
+      date: '2025-07-24',
+      time: '18:00-22:00',
+      location: 'Isla Bonita, Punta Ala'
+    });
+    
+    const qrCode = await QRCode.toDataURL(qrData);
+    return qrCode;
+  } catch (error) {
+    console.error('Error generating QR code:', error);
+    return null;
+  }
+}
+
+// Generate PDF ticket
+async function generateTicketPDF(ticketData) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument();
+      const chunks = [];
+      
+      doc.on('data', chunk => chunks.push(chunk));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      
+      // Header
+      doc.fontSize(24).text('DJ SET - ISLA BONITA', 50, 50);
+      doc.fontSize(16).text('Punta Ala', 50, 80);
+      
+      // Event details
+      doc.fontSize(14).text('Data: 24 Luglio 2025', 50, 120);
+      doc.text('Orario: 18:00 - 22:00', 50, 140);
+      doc.text('Luogo: Isla Bonita, Punta Ala', 50, 160);
+      
+      // Ticket details
+      doc.fontSize(16).text('BIGLIETTO', 50, 200);
+      doc.fontSize(12).text(`ID: ${ticketData.ticket_id}`, 50, 220);
+      doc.text(`Tipo: ${ticketData.type_name}`, 50, 240);
+      doc.text(`Quantità: ${ticketData.quantity}`, 50, 260);
+      doc.text(`Totale: €${(ticketData.total_amount / 100).toFixed(2)}`, 50, 280);
+      
+      // Customer details
+      doc.text(`Nome: ${ticketData.customer_name}`, 50, 320);
+      doc.text(`Email: ${ticketData.customer_email}`, 50, 340);
+      
+      // QR Code (if available)
+      if (ticketData.qr_code) {
+        const qrBuffer = Buffer.from(ticketData.qr_code.split(',')[1], 'base64');
+        doc.image(qrBuffer, 400, 200, { width: 100 });
+      }
+      
+      // Footer
+      doc.fontSize(10).text('Organizzato da ITALY ON DEMAND in collaborazione con Isla Bonita', 50, 500);
+      doc.text('Contatti: giacomo.pencosavli@italyondemand.partners - 3397470384', 50, 520);
+      
+      doc.end();
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+// Send confirmation email
+async function sendConfirmationEmail(ticketData, pdfBuffer) {
+  try {
+    const { data, error } = await resend.emails.send({
+      from: process.env.FROM_EMAIL || 'eventi@italyondemand.partners',
+      to: [ticketData.customer_email],
+      subject: 'Conferma Biglietto - DJ Set Isla Bonita',
+      html: `
+        <h2>Grazie per il tuo acquisto!</h2>
+        <p>Ciao ${ticketData.customer_name},</p>
+        <p>Il tuo biglietto per il DJ Set è stato confermato!</p>
+        
+        <h3>Dettagli Evento:</h3>
+        <ul>
+          <li><strong>Data:</strong> 24 Luglio 2025</li>
+          <li><strong>Orario:</strong> 18:00 - 22:00</li>
+          <li><strong>Luogo:</strong> Isla Bonita, Punta Ala</li>
+        </ul>
+        
+        <h3>Dettagli Biglietto:</h3>
+        <ul>
+          <li><strong>ID:</strong> ${ticketData.ticket_id}</li>
+          <li><strong>Tipo:</strong> ${ticketData.type_name}</li>
+          <li><strong>Quantità:</strong> ${ticketData.quantity}</li>
+          <li><strong>Totale:</strong> €${(ticketData.total_amount / 100).toFixed(2)}</li>
+        </ul>
+        
+        <p>Il tuo biglietto è allegato a questa email. Presentalo all'ingresso insieme a un documento di identità.</p>
+        
+        <p>Per informazioni: giacomo.pencosavli@italyondemand.partners - 3397470384</p>
+        
+        <p>Ci vediamo alla festa!</p>
+        <p><strong>ITALY ON DEMAND</strong></p>
+      `,
+      attachments: [
+        {
+          filename: `biglietto-${ticketData.ticket_id}.pdf`,
+          content: pdfBuffer
+        }
+      ]
+    });
+
+    if (error) {
+      console.error('Error sending email:', error);
+      return false;
+    }
+
+    console.log('Confirmation email sent:', data);
+    return true;
+  } catch (error) {
+    console.error('Error sending confirmation email:', error);
+    return false;
+  }
+}
+
+// Routes
+
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    service: 'DJ Set Ticket API'
+  });
+});
+
+// Get available tickets
+app.get('/api/tickets', (req, res) => {
+  res.json({
+    success: true,
+    tickets: Object.values(TICKET_TYPES)
+  });
+});
+
+// Create payment intent
+app.post('/api/create-payment-intent', async (req, res) => {
+  try {
+    const { ticketType, quantity, customerInfo } = req.body;
+    
+    if (!TICKET_TYPES[ticketType]) {
+      return res.status(400).json({ error: 'Invalid ticket type' });
+    }
+    
+    const ticket = TICKET_TYPES[ticketType];
+    const amount = ticket.price * quantity;
+    
+    // Create payment intent
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount,
+      currency: ticket.currency,
+      metadata: {
+        ticketType,
+        quantity: quantity.toString(),
+        customerName: customerInfo.name,
+        customerEmail: customerInfo.email,
+        customerPhone: customerInfo.phone || ''
+      }
+    });
+    
+    res.json({
+      success: true,
+      clientSecret: paymentIntent.client_secret,
+      amount,
+      currency: ticket.currency
+    });
+    
+  } catch (error) {
+    console.error('Error creating payment intent:', error);
+    res.status(500).json({ error: 'Failed to create payment intent' });
+  }
+});
+
+// Purchase tickets (alternative to Stripe)
+app.post('/api/purchase', async (req, res) => {
+  try {
+    const { ticketType, quantity, customerInfo } = req.body;
+    
+    if (!TICKET_TYPES[ticketType]) {
+      return res.status(400).json({ error: 'Invalid ticket type' });
+    }
+    
+    const ticket = TICKET_TYPES[ticketType];
+    const ticketId = generateTicketId();
+    const totalAmount = ticket.price * quantity;
+    const qrCode = await generateQRCode(ticketId);
+    
+    // Save to database
+    const result = await pool.query(`
+      INSERT INTO tickets (
+        ticket_id, type, quantity, total_amount, currency,
+        customer_name, customer_email, customer_phone,
+        payment_status, qr_code
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      RETURNING *
+    `, [
+      ticketId, ticketType, quantity, totalAmount, ticket.currency,
+      customerInfo.name, customerInfo.email, customerInfo.phone || null,
+      'completed', qrCode
+    ]);
+    
+    const ticketData = {
+      ...result.rows[0],
+      type_name: ticket.name
+    };
+    
+    // Generate PDF
+    const pdfBuffer = await generateTicketPDF(ticketData);
+    
+    // Send email
+    await sendConfirmationEmail(ticketData, pdfBuffer);
+    
+    res.json({
+      success: true,
+      ticket: {
+        id: ticketData.ticket_id,
+        type: ticket.name,
+        quantity,
+        total: totalAmount,
+        currency: ticket.currency
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error processing purchase:', error);
+    res.status(500).json({ error: 'Failed to process purchase' });
+  }
+});
+
+// Divanetti contact request
+app.post('/api/divanetti', async (req, res) => {
+  try {
+    const { name, email, phone, message } = req.body;
+    
+    // Save to database
+    await pool.query(`
+      INSERT INTO divanetti_requests (customer_name, customer_email, customer_phone, message)
+      VALUES ($1, $2, $3, $4)
+    `, [name, email, phone, message || '']);
+    
+    // Send notification email
+    try {
+      await resend.emails.send({
+        from: process.env.FROM_EMAIL || 'eventi@italyondemand.partners',
+        to: ['giacomo.pencosavli@italyondemand.partners'],
+        subject: 'Nuova Richiesta Divanetti - DJ Set',
+        html: `
+          <h2>Nuova Richiesta Divanetti</h2>
+          <p><strong>Nome:</strong> ${name}</p>
+          <p><strong>Email:</strong> ${email}</p>
+          <p><strong>Telefono:</strong> ${phone}</p>
+          <p><strong>Messaggio:</strong> ${message || 'Nessun messaggio'}</p>
+          <p><strong>Data:</strong> ${new Date().toLocaleString('it-IT')}</p>
+        `
+      });
+    } catch (emailError) {
+      console.error('Error sending divanetti notification:', emailError);
+    }
+    
+    res.json({ success: true, message: 'Richiesta inviata con successo' });
+    
+  } catch (error) {
+    console.error('Error processing divanetti request:', error);
+    res.status(500).json({ error: 'Failed to process request' });
+  }
+});
+
+// Stripe webhook
+app.post('/webhook', async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  let event;
+
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.error('Webhook signature verification failed:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  if (event.type === 'payment_intent.succeeded') {
+    const paymentIntent = event.data.object;
+    
+    try {
+      const ticketId = generateTicketId();
+      const qrCode = await generateQRCode(ticketId);
+      
+      // Save to database
+      const result = await pool.query(`
+        INSERT INTO tickets (
+          ticket_id, type, quantity, total_amount, currency,
+          customer_name, customer_email, customer_phone,
+          payment_intent_id, payment_status, qr_code
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        RETURNING *
+      `, [
+        ticketId,
+        paymentIntent.metadata.ticketType,
+        parseInt(paymentIntent.metadata.quantity),
+        paymentIntent.amount,
+        paymentIntent.currency,
+        paymentIntent.metadata.customerName,
+        paymentIntent.metadata.customerEmail,
+        paymentIntent.metadata.customerPhone,
+        paymentIntent.id,
+        'completed',
+        qrCode
+      ]);
+      
+      const ticketData = {
+        ...result.rows[0],
+        type_name: TICKET_TYPES[paymentIntent.metadata.ticketType].name
+      };
+      
+      // Generate PDF and send email
+      const pdfBuffer = await generateTicketPDF(ticketData);
+      await sendConfirmationEmail(ticketData, pdfBuffer);
+      
+    } catch (error) {
+      console.error('Error processing successful payment:', error);
+    }
+  }
+
+  res.json({ received: true });
+});
+
+// Admin routes (protected by token)
+app.get('/api/admin/tickets', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    
+    if (token !== process.env.ADMIN_TOKEN) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    
+    const result = await pool.query(`
+      SELECT * FROM tickets 
+      ORDER BY created_at DESC
+    `);
+    
+    res.json({
+      success: true,
+      tickets: result.rows
+    });
+    
+  } catch (error) {
+    console.error('Error fetching tickets:', error);
+    res.status(500).json({ error: 'Failed to fetch tickets' });
+  }
+});
+
+app.get('/api/admin/stats', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    
+    if (token !== process.env.ADMIN_TOKEN) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    
+    const stats = await pool.query(`
+      SELECT 
+        COUNT(*) as total_tickets,
+        SUM(quantity) as total_quantity,
+        SUM(total_amount) as total_revenue,
+        COUNT(CASE WHEN payment_status = 'completed' THEN 1 END) as completed_payments
+      FROM tickets
+    `);
+    
+    const typeStats = await pool.query(`
+      SELECT 
+        type,
+        COUNT(*) as count,
+        SUM(quantity) as quantity,
+        SUM(total_amount) as revenue
+      FROM tickets
+      WHERE payment_status = 'completed'
+      GROUP BY type
+    `);
+    
+    res.json({
+      success: true,
+      stats: stats.rows[0],
+      byType: typeStats.rows
+    });
+    
+  } catch (error) {
+    console.error('Error fetching stats:', error);
+    res.status(500).json({ error: 'Failed to fetch stats' });
+  }
+});
+
 // Start server
-app.listen(PORT, '0.0.0.0', async () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+app.listen(port, '0.0.0.0', async () => {
+  console.log(`🚀 Server running on port ${port}`);
   await initDatabase();
 });
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received, shutting down gracefully');
-  pool.end();
-  process.exit(0);
-});
-
